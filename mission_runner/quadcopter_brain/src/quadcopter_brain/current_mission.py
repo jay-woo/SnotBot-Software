@@ -3,6 +3,7 @@
 import rospy
 
 from quadcopter import Quadcopter
+from quadcopter_brain import QuadcopterBrain
 from rc_command import RCCommand
 
 
@@ -119,6 +120,6 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
+    main()
     #For debugging, use the following: 
-    rc_square_dance()
+    # rc_square_dance()
