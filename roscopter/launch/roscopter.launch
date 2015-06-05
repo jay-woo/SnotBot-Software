@@ -1,0 +1,4 @@
+<launch>
+  <node ns="apm" pkg="roscopter" type="roscoptercontrol.py" name="roscopter" output="screen" args="--device=/dev/ttyUSB0 --baudrate=57600 --enable-rc-control=true">
+  </node>
+</launch>

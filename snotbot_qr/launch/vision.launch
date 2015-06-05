@@ -1,0 +1,20 @@
+<launch>
+
+<node pkg="snotbot_qr" type="qr_vision" name="vision" required="True">
+</node>
+
+
+<node ns="apm" pkg="roscopter" type="roscoptercontrol.py" name="drone" output="screen" args="--device=/dev/ttyUSB0 --baudrate=57600 --enable-rc-control=true">
+</node>
+
+<node pkg="roscopter" type="driver.py" name="platform" args="--device=/dev/ttyUSB1 --baudrate=57600">
+</node>
+
+<node pkg="joy" type="joy_node" name="joy" required="True">
+<param name="autorepeat_rate" value="5" />
+</node>
+
+<node pkg="snotbot_qr" type="qr_listener.py" name="listener" require="True">
+</node>
+
+</launch>
