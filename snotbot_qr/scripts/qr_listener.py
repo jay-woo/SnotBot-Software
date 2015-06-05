@@ -26,6 +26,8 @@ class MCN():
         self.y = 1500.    # Front Tilt
         self.z = 1500.    # Throttle
         self.yaw = 1500.  # Spin
+        self.mode = 0
+
         self.armed = False
         self.failsafe = False
         self.disarm_time = 0.
@@ -108,72 +110,105 @@ class MCN():
         self.axes = data.axes
         self.buttons = data.buttons
 
-        if not self.failsafe:
-            if not self.tracking:
-                self.t1_alt = self.t2_alt
-                self.t2_alt = int(round(time.time() * 1000))
-                dt_alt = (self.t2_alt - self.t1_alt) / 1000.
-    
-                current_alt = self.alt
-                diff_alt = (self.target_alt - current_alt) - self.error_alt
-                self.error_alt = self.target_alt - current_alt
-                self.sum_alt += self.error_alt * dt_alt
-                
-                self.z = self.pid(self.error_alt, diff_alt, self.sum_alt, dt_alt, 400, 1500, 0.3, 0.3, 0)
-    
-            else:
-                (self.x, self.y, self.z, self.yaw) = self.track_object()
-        else:
+        # Failsafe
+        if self.failsafe:
             self.x = 1500 - self.axes[0] * 300     # Scales 1200-1800
             self.y = 1500 - self.axes[1] * 300     # Scales 1200-1800
             self.z = 2000 + self.axes[3] * 1000    # Scales 1000-2000
             self.yaw = 1500 - self.axes[2] * 300   # Scales 1200-1800
+        else:
+            # Launching
+            if self.mode == 1:
+                self.launch()
+
+            # Searching
+            elif self.mode == 2:
+                self.search()
+
+            # Tracking
+            elif self.mode == 3:
+                self.track()
+
+            # Return to launch pad
+            elif self.mode == 4:
+                self.rtl()
+
+            # Landing
+            elif self.mode == 5:
+                self.land()
+
+            # Disarm
+            elif self.mode == 6:
+                self.disarm()
+
+    def launch(self):
+        self.t1_alt = self.t2_alt
+        self.t2_alt = int(round(time.time() * 1000))
+        dt_alt = (self.t2_alt - self.t1_alt) / 1000.  # Roughly calculates dt
+
+        current_alt = self.alt
+        diff_alt = (self.target_alt - current_alt) - self.error_alt
+        self.error_alt = self.target_alt - current_alt
+        self.sum_alt += self.error_alt * dt_alt
+        
+        self.z = self.pid(self.error_alt, diff_alt, self.sum_alt, dt_alt, 400, 1500, 0.3, 0.3, 0)
+    
+    def search(self):
+        self.x = 1500 # Temporary values
+        self.y = 1600
+        self.z = 1500
+        self.yaw = 1500
+
+    def track(self):
+        self.x = 1500 # Temporary values
+        self.y = 1500
+        self.z = 1500
+        self.yaw = 1500
+
+    def rtl(self):
+        self.x = 1500 # Temporary values
+        self.y = 1500
+        self.z = 1500
+        self.yaw = 1500
+
+    def land(self):
+        self.x = 1500 # Temporary values
+        self.y = 1500
+        self.z = 1300
+        self.yaw = 1500
+
+    def disarm(self):
+        self.x = 1500 # Temporary values
+        self.y = 1500
+        self.z = 1000
+        self.yaw = 1500
 
     def fly(self):
         if self.buttons:
-            # Button 3 - arms drone
-            if self.buttons[2]:
-                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
-                self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
-
-            # Button 4 - disarms drone
-            if self.buttons[3]  and not self.disarming:
-                self.disarming = True
-                self.disarm_time = int(round(time.time() * 1000))
-
             # Button 1 - enters failsafe mode (enables full control)
             if self.buttons[0]:
                 self.failsafe = True
-            
-            # Permits autonomy if failsafe is off
-            if not self.failsafe:
-                # Button 5 - starts search
-                if self.buttons[4]:
-                    self.searching = True
-    
-                # Button 6 - stops search
-                if self.buttons[5]:
-                    self.searching = False
 
-        if self.qr_found and self.searching:
-            self.tracking = True
-            self.searching = False
+            # Button 3 - arms the drone
+            if self.buttons[2]:
+                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_ALT_HOLD)
+                self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
 
-        if self.armed and not self.disarming:
+            # Button 4 - disarms drone
+            if self.buttons[3]:
+                self.command_serv(roscopter.srv.APMCommandRequest.CMD_DISARM)
+
+            # Button 5 - initiate autonomy routine
+            if self.buttons[4]:
+                self.mode = 1
+
+            # Button 6 - end autonomy routine (RTL)
+            if self.buttons[5]:
+                self.mode = 4
+
+        if self.armed:
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
             self.pub_rc.publish(self.twist)
-
-        if self.disarming:
-            (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), 1300, int(self.yaw))
-            if int(round(time.time() * 1000)) - self.disarm_time > 10000:
-                (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), 1000, int(self.yaw))
-
-            self.pub_rc.publish(self.twist)
-
-            if int(round(time.time() * 1000)) - self.disarm_time > 15000:
-                self.command_serv(roscopter.srv.APMCommandRequest.CMD_DISARM)
-                self.disarming = False
-
             
     def track_object(self):
         error_x = 250 - self.data[0]
