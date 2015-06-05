@@ -18,60 +18,60 @@ from roscopter.msg import VFR_HUD, State
 
 class MCN():
     def __init__(self):
-        rospy.init_node('listener', anonymous=False)
+
+        #########################
+        # DRONE STATE VARIABLES #
+        #########################
+
         self.axes = []
         self.buttons = []
         self.twist = [0, 0, 0, 0, 1500, 1500, 1500, 1500]
+        self.gps_data = [0., 0., 0.]
         self.x = 1500.    # Side Tilt
         self.y = 1500.    # Front Tilt
         self.z = 1500.    # Throttle
         self.yaw = 1500.  # Spin
         self.mode = 0
-
         self.armed = False
         self.failsafe = False
-        self.disarm_time = 0.
-        self.disarming = False
-        self.gps_data = [0., 0., 0.]
-        					    # Finite State Machine
-        self.launching = True   # 1. Launches to a certain height
-        self.searching = False  # 2. Moves forward and searches for fiducial
-        self.tracking = False   # 3. Centers itself over fiducial
+        self.disarm_time = 0
+
+
+        ######################
+        # QR STATE VARIABLES #
+        ######################
         
-        # Tracks data from the drone
         self.qr_found = False
         self.data = [0., 0., 0., 0.]
-        self.old_data = self.data
-        self.counter = 0
+
+
+        #########################
+        # PID CONTROLLER VALUES #
+        #########################
+
+        # State
         self.alt = 0.0
-        self.target_alt = 2
 
-        # PID controller - dt = t2 - t1
-        self.t1_alt = int(round(time.time() * 1000))
-        self.t1_x = int(round(time.time() * 1000))
-        self.t1_y = int(round(time.time() * 1000))
-        self.t1_z = int(round(time.time() * 1000))
-        self.t1_yaw = int(round(time.time() * 1000))
+        # Target
+        self.target_alt = 2.0
 
-        self.t2_alt = int(round(time.time() * 1000))
-        self.t2_x = int(round(time.time() * 1000))
-        self.t2_y = int(round(time.time() * 1000))
-        self.t2_z = int(round(time.time() * 1000))
-        self.t2_yaw = int(round(time.time() * 1000))
-
-        # PID controller - current error values
+        # Error: target - state
         self.error_alt = 0.0
-        self.error_x = 0.0
-        self.error_y = 0.0
-        self.error_z = 0.0
-        self.error_yaw = 0.0
 
-        # PID controller - cumulative sum values
+        # Cumulative sum of error
         self.sum_alt = 0.0
-        self.sum_x = 0.0
-        self.sum_y = 0.0
-        self.sum_z = 0.0
-        self.sum_yaw = 0.0
+
+        # Time: dt = t2 - t1
+        self.t1_alt = 0.
+        self.t2_alt = 0.
+
+
+        ######################
+        # ROS INITIALIZATION #
+        ######################
+
+        # Initializing ROS...
+        rospy.init_node('listener', anonymous=False)
 
         # ROS publishers and subscribers
         self.qr_data = rospy.Subscriber('qr_data', Quaternion, self.vision_callback)
@@ -83,29 +83,43 @@ class MCN():
         self.platform_gps = rospy.Subscriber('/gps', NavSatFix, self.gps_callback)
 
         # Flies until the drone is commanded to stop
-        r = rospy.Rate(10)
+        r = rospy.Rate(20)
         while not rospy.is_shutdown():
             self.fly()
             r.sleep()
 
+
+    ###################
+    # ROS SUBSCRIBERS #
+    ###################
+
+    # Subscriber -> /state
     def check_state(self, data):
         self.armed = data.armed
 
+    # Subscriber -> /vfr_hud
     def parse_action(self, data):
         self.alt = data.alt
 
+    # Subscriber -> /gps
     def gps_callback(self, data):
         self.gps_data = {data.latitude, data.longitude, data.altitude}
 
+    # Subscriber -> /qr_data
     def vision_callback(self, data):
         if int(data.w) == -10:
             self.qr_found = False
         else:
             self.qr_found = True
 
-        self.old_data = self.data
         self.data = [data.x, data.y, data.z, data.w]
 
+
+    ########################
+    # FINITE STATE MACHINE #
+    ########################
+
+    # Enables joystick control, sends RC commands to drone
     def joy_callback(self, data):
         self.axes = data.axes
         self.buttons = data.buttons
@@ -127,7 +141,7 @@ class MCN():
 
             # Tracking
             elif self.mode == 3:
-                self.track()
+                self.center()
 
             # Return to launch pad
             elif self.mode == 4:
@@ -141,6 +155,7 @@ class MCN():
             elif self.mode == 6:
                 self.disarm()
 
+    # Mode 1 - launches drone until it reaches a certain altitude
     def launch(self):
         self.t1_alt = self.t2_alt
         self.t2_alt = int(round(time.time() * 1000))
@@ -153,35 +168,48 @@ class MCN():
         
         self.z = self.pid(self.error_alt, diff_alt, self.sum_alt, dt_alt, 400, 1500, 0.3, 0.3, 0)
     
+    # Mode 2 - move drone forwards until it sees a fiducial
     def search(self):
         self.x = 1500 # Temporary values
         self.y = 1600
         self.z = 1500
         self.yaw = 1500
 
-    def track(self):
+    # Mode 3 - center drone over fiducial
+    def center(self):
         self.x = 1500 # Temporary values
         self.y = 1500
         self.z = 1500
         self.yaw = 1500
 
+    # Mode 4 - return to landing platform
     def rtl(self):
         self.x = 1500 # Temporary values
         self.y = 1500
         self.z = 1500
         self.yaw = 1500
 
+    # Mode 5 - land on platform w/ visual servoing
     def land(self):
         self.x = 1500 # Temporary values
         self.y = 1500
         self.z = 1300
         self.yaw = 1500
 
+    # Mode 6 - disarm once landing sequence is complete
     def disarm(self):
         self.x = 1500 # Temporary values
         self.y = 1500
-        self.z = 1000
         self.yaw = 1500
+
+        if int(round(time.time() * 1000)) - self.disarm_time < 10000:
+            self.z = 1300
+        elif int(round(time.time() * 1000)) - self.disarm_time < 15000:
+            self.z = 1000
+        else:
+            self.mode = 0
+            self.command_serv(roscopter.srv.APMCommandRequest.CMD_DISARM)
+
 
     def fly(self):
         if self.buttons:
@@ -196,17 +224,19 @@ class MCN():
 
             # Button 4 - disarms drone
             if self.buttons[3]:
-                self.command_serv(roscopter.srv.APMCommandRequest.CMD_DISARM)
+                self.mode = 6
+                self.disarm_time = int(round(time.time() * 1000))
 
             # Button 5 - initiate autonomy routine
             if self.buttons[4]:
                 self.mode = 1
+                self.t1_alt = int(round(time.time() * 1000)) # For PID control
 
             # Button 6 - end autonomy routine (RTL)
             if self.buttons[5]:
                 self.mode = 4
 
-        if self.armed:
+        if self.armed and self.mode != 0:
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
             self.pub_rc.publish(self.twist)
             
