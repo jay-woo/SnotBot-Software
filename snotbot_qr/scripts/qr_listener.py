@@ -31,10 +31,19 @@ class MCN():
         self.y = 1500.    # Front Tilt
         self.z = 1500.    # Throttle
         self.yaw = 1500.  # Spin
+        self.tilt = 1000. # Camera tilt
         self.mode = 0
         self.armed = False
         self.failsafe = False
         self.disarm_time = 0
+
+
+        ##################################
+        # FINITE STATE MACHINE VARIABLES #
+        ##################################        
+
+        self.switch_12 = 0.   # Determines when to switch
+        self.switch_23 = 0.   # from mode x to mode y
 
 
         ######################
@@ -53,7 +62,7 @@ class MCN():
         self.alt = 0.0
 
         # Target
-        self.target_alt = 2.0
+        self.target_alt = 0.5
 
         # Error: target - state
         self.error_alt = 0.0
@@ -157,21 +166,36 @@ class MCN():
 
     # Mode 1 - launches drone until it reaches a certain altitude
     def launch(self):
+    	# Calculates dt - t1 is from a previous calculation
+    	#                 t2 is from the current calculation
         self.t1_alt = self.t2_alt
         self.t2_alt = int(round(time.time() * 1000))
         dt_alt = (self.t2_alt - self.t1_alt) / 1000.  # Roughly calculates dt
 
+        # Calculates error, error difference, error cumulative sum
         current_alt = self.alt
         diff_alt = (self.target_alt - current_alt) - self.error_alt
         self.error_alt = self.target_alt - current_alt
         self.sum_alt += self.error_alt * dt_alt
         
+        # Maintains target altitude w/ PID control
         self.z = self.pid(self.error_alt, diff_alt, self.sum_alt, dt_alt, 400, 1500, 0.3, 0.3, 0)
+
+        # If the drone maintains the target altitude for a few seconds, go to the next mode
+        if abs(current_alt - self.target_alt) > 0.1:
+            self.switch_12 = int(round(time.time() * 1000))
+        else:
+            if int(round(time.time() * 1000)) - self.switch_12 > 3000:
+                self.mode = 2
     
     # Mode 2 - move drone forwards until it sees a fiducial
     def search(self):
+        # 1. Point gimbal forwards
+        # 2. Use vision to track an object
+        # 3. Adjust gimbal and yaw to keep object in vision
+
         self.x = 1500 # Temporary values
-        self.y = 1600
+        self.y = 1550
         self.z = 1500
         self.yaw = 1500
 
@@ -231,6 +255,8 @@ class MCN():
             if self.buttons[4]:
                 self.mode = 1
                 self.t1_alt = int(round(time.time() * 1000)) # For PID control
+                self.switch_12 = int(round(time.time() * 1000)) # Keeps track of the time
+                                                                # for switching b/w modes
 
             # Button 6 - end autonomy routine (RTL)
             if self.buttons[5]:
@@ -238,6 +264,7 @@ class MCN():
 
         if self.armed and self.mode != 0:
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
+            self.twist[5] = self.tilt
             self.pub_rc.publish(self.twist)
             
     def track_object(self):
