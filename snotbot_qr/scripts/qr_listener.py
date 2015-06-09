@@ -6,6 +6,7 @@ roslib.load_manifest('roscopter')
 from geometry_msgs.msg import Quaternion
 import roscopter.msg
 import matplotlib.pyplot as plt
+import math
 
 from std_srvs.srv import *
 from std_msgs.msg import String, Header, Int32
@@ -26,7 +27,8 @@ class MCN():
         self.axes = []
         self.buttons = []
         self.twist = [0, 0, 0, 0, 1500, 1500, 1500, 1500]
-        self.gps_data = [0., 0., 0.]
+        self.drone_gps = []
+        self.platform_gps = []
         self.x = 1500.    # Side Tilt
         self.y = 1500.    # Front Tilt
         self.z = 1500.    # Throttle
@@ -44,6 +46,8 @@ class MCN():
 
         self.switch_12 = 0.   # Determines when to switch
         self.switch_23 = 0.   # from mode x to mode y
+        self.switch_34 = 0.
+        self.switch_45 = 0.
 
 
         ######################
@@ -62,7 +66,7 @@ class MCN():
         self.alt = 0.0
 
         # Target
-        self.target_alt = 0.5
+        self.target_alt = 3.0
 
         # Error: target - state
         self.error_alt = 0.0
@@ -88,8 +92,10 @@ class MCN():
         self.sub_joy = rospy.Subscriber("/joy", Joy, self.joy_callback)
         self.sub_state = rospy.Subscriber("/apm/state", State, self.check_state)
         self.sub_height = rospy.Subscriber('/apm/vfr_hud', VFR_HUD, self.parse_action)
+        self.drone_gps = rospy.Subscriber('/apm/gps', NavSatFix, self.drone_gps_callback)
+        self.platform_gps = rospy.Subscriber('/gps', NavSatFix, self.platform_gps_callback)
+        self.waypoints_serv = rospy.ServiceProxy('/apm/waypoint', roscopter.srv.SendWaypoint)
         self.command_serv = rospy.ServiceProxy('/apm/command', APMCommand)
-        self.platform_gps = rospy.Subscriber('/gps', NavSatFix, self.gps_callback)
 
         # Flies until the drone is commanded to stop
         r = rospy.Rate(20)
@@ -109,10 +115,14 @@ class MCN():
     # Subscriber -> /vfr_hud
     def parse_action(self, data):
         self.alt = data.alt
+    
+    # Subscriber -> /apm/gps
+    def drone_gps_callback(self, data):
+        self.drone_gps = [data.latitude, data.longitude, data.altitude]
 
     # Subscriber -> /gps
-    def gps_callback(self, data):
-        self.gps_data = {data.latitude, data.longitude, data.altitude}
+    def platform_gps_callback(self, data):
+        self.platform_gps = [data.latitude, data.longitude, data.altitude]
 
     # Subscriber -> /qr_data
     def vision_callback(self, data):
@@ -195,7 +205,7 @@ class MCN():
         # 3. Adjust gimbal and yaw to keep object in vision
 
         self.x = 1500 # Temporary values
-        self.y = 1550
+        self.y = 1500
         self.z = 1500
         self.yaw = 1500
 
@@ -208,10 +218,20 @@ class MCN():
 
     # Mode 4 - return to landing platform
     def rtl(self):
-        self.x = 1500 # Temporary values
-        self.y = 1500
-        self.z = 1500
-        self.yaw = 1500
+        home = roscopter.msg.Waypoint()
+        (home.latitude, home.longitude, home.altitude) = (self.platform_gps[0], self.platform_gps[1], self.platform_gps[2])
+        home.waypoint_type = roscopter.msg.Waypoint.TYPE_NAV
+
+        # Approximate GPS distance b/w platform and drone (assumes Earth is flat...)
+        x1 = self.drone_gps[0]
+        x2 = self.platform_gps[0]
+        y1 = self.drone_gps[1]
+        y2 = self.platform_gps[1]
+        error = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+
+        rospy.loginfo(error)
+
+    	self.waypoints_serv(home)
 
     # Mode 5 - land on platform w/ visual servoing
     def land(self):
@@ -243,13 +263,14 @@ class MCN():
 
             # Button 3 - arms the drone
             if self.buttons[2]:
-                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_ALT_HOLD)
+                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
                 self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
 
             # Button 4 - disarms drone
             if self.buttons[3]:
                 self.mode = 6
                 self.disarm_time = int(round(time.time() * 1000))
+                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
 
             # Button 5 - initiate autonomy routine
             if self.buttons[4]:
@@ -262,7 +283,7 @@ class MCN():
             if self.buttons[5]:
                 self.mode = 4
 
-        if self.armed and self.mode != 0:
+        if self.armed and self.mode != 0 and self.mode != 4:
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
             self.twist[5] = self.tilt
             self.pub_rc.publish(self.twist)
