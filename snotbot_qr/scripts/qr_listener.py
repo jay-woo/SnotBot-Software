@@ -34,10 +34,12 @@ class MCN():
         self.z = 1500.    # Throttle
         self.yaw = 1500.  # Spin
         self.tilt = 1000. # Camera tilt
-        self.mode = 0
-        self.armed = False
+        self.fight_mode = 1327 # Flight modes: stabilize = 1146
+        self.mode = 0          #               loiter    = 1327
+        self.armed = False     #               auto      = 1431
         self.failsafe = False
         self.disarm_time = 0
+        self.waypoint_time = 0.
 
 
         ##################################
@@ -66,7 +68,7 @@ class MCN():
         self.alt = 0.0
 
         # Target
-        self.target_alt = 3.0
+        self.target_alt = 5.0   
 
         # Error: target - state
         self.error_alt = 0.0
@@ -179,7 +181,7 @@ class MCN():
     	# Calculates dt - t1 is from a previous calculation
     	#                 t2 is from the current calculation
         self.t1_alt = self.t2_alt
-        self.t2_alt = int(round(time.time() * 1000))
+        self.t2_alt = millis()
         dt_alt = (self.t2_alt - self.t1_alt) / 1000.  # Roughly calculates dt
 
         # Calculates error, error difference, error cumulative sum
@@ -193,9 +195,9 @@ class MCN():
 
         # If the drone maintains the target altitude for a few seconds, go to the next mode
         if abs(current_alt - self.target_alt) > 0.1:
-            self.switch_12 = int(round(time.time() * 1000))
+            self.switch_12 = millis()
         else:
-            if int(round(time.time() * 1000)) - self.switch_12 > 3000:
+            if millis() - self.switch_12 > 3000:
                 self.mode = 2
     
     # Mode 2 - move drone forwards until it sees a fiducial
@@ -218,20 +220,21 @@ class MCN():
 
     # Mode 4 - return to landing platform
     def rtl(self):
-        home = roscopter.msg.Waypoint()
-        (home.latitude, home.longitude, home.altitude) = (self.platform_gps[0], self.platform_gps[1], self.platform_gps[2])
-        home.waypoint_type = roscopter.msg.Waypoint.TYPE_NAV
-
-        # Approximate GPS distance b/w platform and drone (assumes Earth is flat...)
-        x1 = self.drone_gps[0]
-        x2 = self.platform_gps[0]
-        y1 = self.drone_gps[1]
-        y2 = self.platform_gps[1]
-        error = math.sqrt((x2-x1)**2 + (y2-y1)**2)
-
-        rospy.loginfo(error)
-
-    	self.waypoints_serv(home)
+        if millis() - self.waypoint_time > 1000:
+            # GPS lock onto landing platform
+            home = roscopter.msg.Waypoint()
+            (home.latitude, home.longitude, home.altitude) = (self.platform_gps[0], self.platform_gps[1], self.platform_gps[2] + 5000)
+            home.waypoint_type = roscopter.msg.Waypoint.TYPE_NAV
+    
+            # Approximate GPS distance b/w platform and drone (assumes Earth is flat...)
+            x1 = self.drone_gps[0]
+            x2 = self.platform_gps[0]
+            y1 = self.drone_gps[1]
+            y2 = self.platform_gps[1]
+            error = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+    
+    	    self.waypoints_serv(home)
+            self.waypoint_time = millis()
 
     # Mode 5 - land on platform w/ visual servoing
     def land(self):
@@ -246,9 +249,9 @@ class MCN():
         self.y = 1500
         self.yaw = 1500
 
-        if int(round(time.time() * 1000)) - self.disarm_time < 10000:
+        if millis() - self.disarm_time < 10000:
             self.z = 1300
-        elif int(round(time.time() * 1000)) - self.disarm_time < 15000:
+        elif millis() - self.disarm_time < 15000:
             self.z = 1000
         else:
             self.mode = 0
@@ -263,30 +266,49 @@ class MCN():
 
             # Button 3 - arms the drone
             if self.buttons[2]:
+                self.switch_mode("LOITER")
                 self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
                 self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
 
             # Button 4 - disarms drone
             if self.buttons[3]:
                 self.mode = 6
-                self.disarm_time = int(round(time.time() * 1000))
+                self.disarm_time = millis()
+                self.switch_mode("LOITER")
                 self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
 
             # Button 5 - initiate autonomy routine
             if self.buttons[4]:
                 self.mode = 1
-                self.t1_alt = int(round(time.time() * 1000)) # For PID control
-                self.switch_12 = int(round(time.time() * 1000)) # Keeps track of the time
+                self.t1_alt = millis() # For PID control
+                self.switch_12 = millis() # Keeps track of the time
                                                                 # for switching b/w modes
 
             # Button 6 - end autonomy routine (RTL)
             if self.buttons[5]:
+                self.waypoint_time = millis()
+                self.switch_mode("AUTO")
+                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_AUTO)
                 self.mode = 4
 
         if self.armed and self.mode != 0 and self.mode != 4:
+            self.twist[0]
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
+            self.twist[4] = self.flight_mode
             self.twist[5] = self.tilt
             self.pub_rc.publish(self.twist)
+
+    def switch_mode(self, mode_name):
+        if mode_name == "ALT_HOLD":
+            self.flight_mode = 1146
+        elif mode_name == "LOITER":
+            self.flight_mode = 1327
+        elif mode_name == "AUTO":
+            self.flight_mode = 1431
+
+        (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (1500, 1500, 1500, 1500)
+        self.twist[4] = self.flight_mode
+        self.pub_rc.publish(self.twist)
             
     def track_object(self):
         error_x = 250 - self.data[0]
@@ -307,6 +329,9 @@ class MCN():
         D = K_d * error_dif / dt
 
         return (P + I + D) * control_range + control_mid
+
+def millis():
+    return int(round(time.time() * 1000))
 
 if __name__ == '__main__':
     print 'process started at ' + str(datetime.now())

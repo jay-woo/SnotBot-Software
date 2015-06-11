@@ -4,7 +4,7 @@
 </node>
 
 
-<node ns="apm" pkg="roscopter" type="roscoptercontrol.py" name="drone" output="screen" args="--device=/dev/ttyUSB0 --baudrate=57600 --enable-rc-control=true --enable-waypoint-control=true">
+<node ns="apm" pkg="roscopter" type="roscoptercontrol.py" name="drone" output="screen" args="--device=/dev/ttyUSB0 --baudrate=57600 --enable-rc-control=true --enable-waypoint-control=true --minimum-waypoint-altitude=3000">
 </node>
 
 <node pkg="roscopter" type="driver.py" name="platform" args="--device=/dev/ttyUSB1 --baudrate=57600">

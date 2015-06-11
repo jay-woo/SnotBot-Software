@@ -39,7 +39,7 @@ parser.add_option("--enable-waypoint-control",dest="enable_waypoint_control",
 # Altitude Safety Parameters
 parser.add_option("--launch-altitude",dest="launch_altitude", default=10000, 
                   type='int', help="default launch altitude in milli-meters")
-parser.add_option("--minimum-waypoint-altitude", dest="minimum_mission_altitude", default=5000,
+parser.add_option("--minimum-waypoint-altitude", dest="minimum_mission_altitude", default=3000,
                   type='int', help="Minimum altitude waypoints must have to be accepted (milli-meters)")
 parser.add_option("--maximum-altitude", dest="maximum_altitude", default=50000,
                   type='int', help="Maximum allowable altitude for vehicle to fly")
@@ -537,6 +537,7 @@ def waypoint_cb(req):
             return False
 
     rospy.loginfo ("Sending Single Waypoint")
+    clear_waypoints()
 
     # Number of waypoints (Plus Dummy Waypoint)
     master.mav.mission_count_send(master.target_system, master.target_component, 2)

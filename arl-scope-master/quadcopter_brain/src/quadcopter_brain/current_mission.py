@@ -22,35 +22,35 @@ def main():
 
     #### GPS Landing Test
     # Quadcopter node (carl) must be initialized before get_param will work
-    # outside = rospy.get_param("Quadcopter/outside", False)
-    # rospy.loginfo("In outside mode: %s.", outside)
-    # rospy.loginfo("If incorrect, add _outside:=True to the rosrun call")
+    outside = rospy.get_param("Quadcopter/outside", False)
+    rospy.loginfo("In outside mode: %s.", outside)
+    rospy.loginfo("If incorrect, add _outside:=True to the rosrun call")
 
-    # carl.quadcopter.clear_waypoints()
-    # rospy.loginfo("Sleeping for 3 seconds...")
-    # rospy.sleep(3)
+    carl.quadcopter.clear_waypoints()
+    rospy.loginfo("Sleeping for 3 seconds...")
+    rospy.sleep(3)
 
-    # waypoints = WaypointTools.open_waypoint_file(
-    #     "soccer_field_waypoints.json")
+    waypoints = WaypointTools.open_waypoint_file(
+        "soccer_field_waypoints.json")
 
-    # if outside:
-    #     carl.arm()
-    # carl.launch()
+    if outside:
+        carl.arm()
+    carl.launch()
 
-    # found, _, _ = \
-    #     carl.find_landing_site_at_waypoints([waypoints['A'],
-    #                                          waypoints['B'],
-    #                                          waypoints['C']])
-    # if found:
-    #     carl.land_on_fiducial_incremental()
-    # else:
-    #     carl.land()
+    found, _, _ = \
+        carl.find_landing_site_at_waypoints([waypoints['A'],
+                                             waypoints['B'],
+                                             waypoints['C']])
+    if found:
+        carl.land_on_fiducial_incremental()
+    else:
+        carl.land()
 
     #### APP Landing Test
     #### APP cannot be run in conjunction with waypoints
-    rospy.loginfo("Starting rc land")
-    carl.rc_land_on_fiducial()
-    carl.quadcopter.return_rc_control()
+    # rospy.loginfo("Starting rc land")
+    # carl.rc_land_on_fiducial()
+    # carl.quadcopter.return_rc_control()
 
 
 if __name__ == '__main__':
