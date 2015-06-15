@@ -20,6 +20,9 @@ from roscopter.msg import VFR_HUD, State, Attitude
 
 class MCN():
     def __init__(self):
+	'''
+		Initializes an instance of the drone's control algorithms
+	'''
 
         #########################
         # DRONE STATE VARIABLES #
@@ -43,6 +46,7 @@ class MCN():
         self.climb = 0.
         self.mode = 0
         self.armed = False
+        self.starting_alt = 0
 
         # Various failsafe variables
         self.failsafe = False
@@ -110,8 +114,10 @@ class MCN():
     # ROS SUBSCRIBERS #
     ###################
 
-    # Obtains camera data from drone
     def vision_callback(self, data):
+    '''
+		Obtains computer vision data from the drone
+	'''
         if int(data.w) == -10:
             self.qr_found = False
         else:
@@ -119,8 +125,10 @@ class MCN():
 
         self.data = [data.x, data.y, data.z, data.w]
 
-    # Enables joystick control, sends RC commands to drone
     def joy_callback(self, data):
+	'''
+		Obtains joystick data
+	'''
         self.axes = data.axes
         self.buttons = data.buttons
 
@@ -131,42 +139,59 @@ class MCN():
             self.z = 2000 + self.axes[3] * 1000    # Scales 1000-2000
             self.yaw = 1500 - self.axes[2] * 300   # Scales 1200-1800
 
-    # Gets GPS coordinates of drone
     def drone_gps_callback(self, data):
+    '''
+		Obtains drone's GPS coordinates
+	'''
         (self.drone_gps.x, self.drone_gps.y, self.drone_gps.z) = (data.latitude, data.longitude, data.altitude)
 
-    # Gets GPS coordinates of landing platform
     def platform_gps_callback(self, data):
+    '''
+		Obtains landing platform's GPS coordinates
+	'''
         (self.platform_gps.x, self.platform_gps.y, self.platform_gps.z) = (data.latitude, data.longitude, data.altitude)
 
-    # Gets certain state variables from the drone
     def check_state(self, data):
+	'''
+		Obtains arming and flight mode information
+	'''
         self.armed = data.armed
         self.flight_mode = data.mode
 
-    # Gets drone's attitude information
     def attitude_callback(self, data):
+    '''
+		Obtains current yaw of vehicle
+	'''
         self.current_state['yaw'] = data.yaw
 
-    # Gets miscellaneous information from drone
     def parse_action(self, data):
-        self.current_state['z'] = data.alt
+    '''
+		Obtains state variables to be used in control algorithms
+	'''
         self.climb = data.climb
+        self.current_state['z'] = data.alt
+        if not self.starting_alt:
+        	self.starting_alt = data.alt
 
 
     ########################
     # FINITE STATE MACHINE #
     ########################
 
-    # Mode 1 - arms the drone
     def arm(self):
+    '''
+		Mode 1: arms the drone
+	'''
         self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
         self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
         self.mode = 2
         self.arm_time = millis()
 
-    # Mode 2 - launches drone until it reaches a certain altitude
     def launch(self):
+    '''
+		Mode 2: launches the drone into the air up to a certain altitude
+	'''
+	    # Waits 5 seconds after arming to launch
         if millis() - self.arm_time > 5000:
             # If the drone maintains the target altitude for a few seconds, go to the next mode
             if abs(current_alt - self.target_state['z']) > 1.0:
@@ -177,8 +202,10 @@ class MCN():
                     self.t2['z'] = 0
                     self.mode = 6
     
-    # Mode 3 - move drone forwards until it sees a fiducial
     def search(self):
+    '''
+		Mode 3: drone moves forwards until it is directly above the fiducial
+	'''
         # 1. Point gimbal forwards
         # 2. Use vision to track an object
         # 3. Adjust gimbal and yaw to keep object in vision
@@ -188,50 +215,66 @@ class MCN():
         self.z = 1500
         self.yaw = 1500
 
-    # Mode 4 - center drone over fiducial
     def center(self):
+    '''
+		Mode 4: centers the drone over the fiducial at a certain height
+	'''
         self.x = 1500 # Temporary values
         self.y = 1500
         self.z = 1500
         self.yaw = 1500
 
-    # Mode 5 - return to landing platform
     def rtl(self):
+    '''
+		Mode 5: return to landing platform
+	'''
         self.target_state['yaw'] = gps_tools.bearing(self.drone_gps, self.platform_gps)
         error = self.target_state['yaw'] - self.current_state['yaw']
 
         # Turns the drone towards the landing platform then moves it forwards
-        if abs(error) > 0.25:
+        if abs(error) < 0.25:  # Doesn't move forwards if not facing in the correct direction
             self.y = 1700
         else:
             self.y = 1500
 
+        # Stops RTL if the drone is within 3 meters of the target
         if gps_tools.distance(self.drone_gps, self.platform_gps) > 0.03 
             self.yaw = self.pid('yaw')
         else:
             self.t2['yaw'] = 0
             self.mode = 6
 
-    # Mode 6 - land on platform w/ visual servoing
     def land(self):
+    '''
+		Mode 6: lands drone onto landing platform w/ visual servoing
+	'''
         self.x = 1500 # Temporary values
         self.y = 1500
         self.z = 1300
         self.yaw = 1500
 
-    # Mode 7 - disarm once landing sequence is complete
+        # Moves to disarming phase if altitude has dropped far enough
+        if abs(self.current_state['z'] - self.starting_alt) < 0.5:
+        	self.mode = 7
+
     def disarm(self):
+    '''
+		Mode 7: disarms the drone after several seconds of inactivity
+	'''
         self.x = 1500 # Temporary values
         self.y = 1500
         self.z = 1000
         self.yaw = 1500
 
+        # Timeout before actual disarm occurs
         if millis() - self.disarm_time < 5000:
             self.mode = 0
             self.command_serv(roscopter.srv.APMCommandRequest.CMD_DISARM)
 
-    # Publishes RC commands to the vehicle
     def fly(self):
+    '''
+		Publishes RC commands to the vehicle, depending on what mode it is currently in
+	'''
         if self.buttons:
             # Button 1 - enters failsafe mode (enables full control)
             if self.buttons[0]:
@@ -239,7 +282,6 @@ class MCN():
 
             # Button 3 - arms the drone
             if self.buttons[2]:
-                self.switch_mode("LOITER")
                 self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
                 self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
 
@@ -247,8 +289,6 @@ class MCN():
             if self.buttons[3]:
                 self.mode = 6
                 self.disarm_time = millis()
-                self.switch_mode("LOITER")
-                self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
 
             # Button 5 - initiate autonomy routine
             if self.buttons[4]:
@@ -295,6 +335,9 @@ class MCN():
             self.pub_rc.publish(self.twist)
             
     def track_object(self):
+    '''
+		Tracks a fiducial 
+	'''
         error_x = 250 - self.data[0]
         error_y = 200 - self.data[1]
         error_z = 100 - self.data[2]
@@ -308,10 +351,14 @@ class MCN():
         return (pid_x, pid_y, pid_z, pid_yaw)
 
     def pid(self, variable_name):
+    '''
+		Calculates the best control signal to be published in order for the
+		drone to reach the target state.
+	'''
         # If pid is running for the first time, start with tiny dt
         if self.t2[variable_name] == 0:
             self.t1[variable_name] = millis()
-            self.t2[variable_name] = millis() + 0.0001 # Prevent division by zero
+            self.t2[variable_name] = millis() + 0.001 # Prevent division by zero
         else:
             self.t1[variable_name] = t2[variable_name]
             self.t2[variable_name] = millis()
@@ -334,6 +381,9 @@ class MCN():
 
 
 def millis():
+	'''
+		Calculates the number of milliseconds since the epoch started
+	'''
     return int(round(time.time() * 1000))
 
 if __name__ == '__main__':

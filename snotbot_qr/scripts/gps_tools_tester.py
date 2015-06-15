@@ -7,8 +7,8 @@ def distance_unittest():
 	return gps_tools.distance(p1, p2)
 
 def bearing_unittest():
-	p1 = gps_tools.Point(0, -90, 0) # Olin
-	p2 = gps_tools.Point(0, 90, 0) # NW of Olin
+	p1 = gps_tools.Point(0, -90, 0) # East
+	p2 = gps_tools.Point(0, 90, 0) # West
 
 	return gps_tools.bearing(p1, p2)
 
