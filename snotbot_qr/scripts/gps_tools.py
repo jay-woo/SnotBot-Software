@@ -41,6 +41,9 @@ def bearing(point1, point2):
 
 	dlon = lon2 - lon1
 	dlat = lat2 - lat1
-	b = atan2(dlon, dlat) - pi / 2
+	b = atan2(dlon, dlat)
+
+	if b < 0:
+		b += 2 * pi
 
 	return b

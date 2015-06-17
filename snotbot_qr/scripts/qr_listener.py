@@ -13,10 +13,10 @@ from std_srvs.srv import *
 from std_msgs.msg import String, Header, Int32
 from geometry_msgs.msg import Twist, Pose
 from std_msgs.msg import Empty
-from sensor_msgs.msg import Joy, Imu, NavSatStatus, NavSatFix
+from sensor_msgs.msg import Joy, Imu, NavSatStatus
 from datetime import datetime
 from roscopter.srv import APMCommand
-from roscopter.msg import VFR_HUD, State, Attitude
+from roscopter.msg import VFR_HUD, State, Attitude, FilteredPosition
 
 class MCN():
     def __init__(self):
@@ -52,6 +52,7 @@ class MCN():
         self.failsafe = False
         self.arm_time = 0       # Arming
         self.althold_time = 0   # Launching
+        self.rtl_time = 0       # Return to launch
         self.land_time = 0      # Landing
         self.disarm_time = 0    # Disarming
 
@@ -68,17 +69,17 @@ class MCN():
         # PID CONTROLLER VALUES #
         #########################
 
-        self.current_state = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}      # Current state
-        self.target_state = {'x': 0, 'y': 0, 'z': 5.0, 'yaw': 0}     # Target state
-        self.error = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}              # Error state (target - current)
-        self.error_prev = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}         # Previous error
-        self.error_sum = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}          # Error cumulative sum
-        self.t1 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}                 # Time of previous calculation
-        self.t2 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}                 # Time of current calculation
+        self.current_state = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}   # Current state
+        self.target_state = {'x': 0, 'y': 0, 'z': 5.0, 'yaw': 0}  # Target state
+        self.error = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}           # Error state (target - current)
+        self.error_prev = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}      # Previous error
+        self.error_sum = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}       # Error cumulative sum
+        self.t1 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}              # Time of previous calculation
+        self.t2 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}              # Time of current calculation
 
-        self.K_p = {'x': 0, 'y': 0, 'z': 0.3, 'yaw': 0.2}            # Proportional control
-        self.K_i = {'x': 0, 'y': 0, 'z': 0.6, 'yaw': 0.4}            # Integral control
-        self.K_d = {'x': 0, 'y': 0, 'z': 0  , 'yaw': 0  }            # Differential control
+        self.K_p = {'x': 0.0, 'y': 0.0, 'z': 0.3, 'yaw': 0.1}     # Proportional control
+        self.K_i = {'x': 0.0, 'y': 0.0, 'z': 0.6, 'yaw': 0.1}     # Integral control
+        self.K_d = {'x': 0.0, 'y': 0.0, 'z': 0.001, 'yaw': 0.0}     # Differential control
 
 
         ######################
@@ -93,14 +94,14 @@ class MCN():
         self.sub_joy = rospy.Subscriber("/joy", Joy, self.joy_callback)
 
         # Landing platform nodes
-        self.platform_gps = rospy.Subscriber('/gps', NavSatFix, self.platform_gps_callback)
+        self.platform_gps = rospy.Subscriber('/filtered_pos', FilteredPosition, self.platform_gps_callback)
 
         # Drone nodes
         self.pub_rc = rospy.Publisher('/apm/send_rc', roscopter.msg.RC)
         self.sub_attitude = rospy.Subscriber("/apm/attitude", Attitude, self.attitude_callback)
         self.sub_state = rospy.Subscriber("/apm/state", State, self.check_state)
         self.sub_height = rospy.Subscriber('/apm/vfr_hud', VFR_HUD, self.parse_action)
-        self.drone_gps = rospy.Subscriber('/apm/gps', NavSatFix, self.drone_gps_callback)
+        self.drone_gps = rospy.Subscriber('/apm/filtered_pos', FilteredPosition, self.drone_gps_callback)
         self.command_serv = rospy.ServiceProxy('/apm/command', APMCommand)
 
         # Flies until the drone is commanded to stop
@@ -115,7 +116,7 @@ class MCN():
     ###################
 
     def vision_callback(self, data):
-    '''
+	'''
 		Obtains computer vision data from the drone
 	'''
         if int(data.w) == -10:
@@ -140,16 +141,20 @@ class MCN():
             self.yaw = 1500 - self.axes[2] * 300   # Scales 1200-1800
 
     def drone_gps_callback(self, data):
-    '''
+	'''
 		Obtains drone's GPS coordinates
 	'''
-        (self.drone_gps.x, self.drone_gps.y, self.drone_gps.z) = (data.latitude, data.longitude, data.altitude)
+        self.drone_gps.x = data.longitude / 10000000.
+        self.drone_gps.y = data.latitude / 10000000.
+        self.drone_gps.z = data.altitude / 10000000.
 
     def platform_gps_callback(self, data):
-    '''
+	'''
 		Obtains landing platform's GPS coordinates
 	'''
-        (self.platform_gps.x, self.platform_gps.y, self.platform_gps.z) = (data.latitude, data.longitude, data.altitude)
+        self.platform_gps.x = data.longitude / 10000000.
+        self.platform_gps.y = data.latitude / 10000000.
+        self.platform_gps.z = data.altitude / 10000000.
 
     def check_state(self, data):
 	'''
@@ -159,13 +164,15 @@ class MCN():
         self.flight_mode = data.mode
 
     def attitude_callback(self, data):
-    '''
+	'''
 		Obtains current yaw of vehicle
 	'''
         self.current_state['yaw'] = data.yaw
+        if data.yaw < 0:
+            self.current_state['yaw'] += 2 * math.pi
 
     def parse_action(self, data):
-    '''
+	'''
 		Obtains state variables to be used in control algorithms
 	'''
         self.climb = data.climb
@@ -179,7 +186,7 @@ class MCN():
     ########################
 
     def arm(self):
-    '''
+	'''
 		Mode 1: arms the drone
 	'''
         self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
@@ -188,22 +195,23 @@ class MCN():
         self.arm_time = millis()
 
     def launch(self):
-    '''
+	'''
 		Mode 2: launches the drone into the air up to a certain altitude
 	'''
 	    # Waits 5 seconds after arming to launch
         if millis() - self.arm_time > 5000:
             # If the drone maintains the target altitude for a few seconds, go to the next mode
-            if abs(current_alt - self.target_state['z']) > 1.0:
+            if abs(self.current_state['z'] - self.target_state['z']) > 1.0:
                 self.z = self.pid('z')
                 self.althold_time = millis()
             else:
                 if millis() - self.althold_time > 3000:
-                    self.t2['z'] = 0
-                    self.mode = 6
+                    self.reset_pid()
+                    self.rtl_time = milli()
+                    self.mode = 5
     
     def search(self):
-    '''
+	'''
 		Mode 3: drone moves forwards until it is directly above the fiducial
 	'''
         # 1. Point gimbal forwards
@@ -216,7 +224,7 @@ class MCN():
         self.yaw = 1500
 
     def center(self):
-    '''
+	'''
 		Mode 4: centers the drone over the fiducial at a certain height
 	'''
         self.x = 1500 # Temporary values
@@ -225,27 +233,32 @@ class MCN():
         self.yaw = 1500
 
     def rtl(self):
-    '''
+	'''
 		Mode 5: return to landing platform
 	'''
         self.target_state['yaw'] = gps_tools.bearing(self.drone_gps, self.platform_gps)
         error = self.target_state['yaw'] - self.current_state['yaw']
+        epsilon = 0.3
 
         # Turns the drone towards the landing platform then moves it forwards
-        if abs(error) < 0.25:  # Doesn't move forwards if not facing in the correct direction
-            self.y = 1700
+        if abs(error) < 0.3 or abs(error - 2 * math.pi) < epsilon:  # Doesn't move forwards if not facing in the correct direction
+            if millis() - self.rtl_time > 5000:
+                self.y = 1550
         else:
+            self.rtl_time = millis()
             self.y = 1500
 
         # Stops RTL if the drone is within 3 meters of the target
-        if gps_tools.distance(self.drone_gps, self.platform_gps) > 0.03 
+        if gps_tools.distance(self.drone_gps, self.platform_gps) > 0.005:
             self.yaw = self.pid('yaw')
+            if error > math.pi:
+                self.yaw = 3000 - self.yaw
         else:
-            self.t2['yaw'] = 0
+            self.reset_pid()
             self.mode = 6
 
     def land(self):
-    '''
+	'''
 		Mode 6: lands drone onto landing platform w/ visual servoing
 	'''
         self.x = 1500 # Temporary values
@@ -254,11 +267,12 @@ class MCN():
         self.yaw = 1500
 
         # Moves to disarming phase if altitude has dropped far enough
-        if abs(self.current_state['z'] - self.starting_alt) < 0.5:
+        if abs(self.current_state['z'] - self.starting_alt) < 2.0:
+        	self.disarm_time = millis()
         	self.mode = 7
 
     def disarm(self):
-    '''
+	'''
 		Mode 7: disarms the drone after several seconds of inactivity
 	'''
         self.x = 1500 # Temporary values
@@ -267,12 +281,12 @@ class MCN():
         self.yaw = 1500
 
         # Timeout before actual disarm occurs
-        if millis() - self.disarm_time < 5000:
+        if millis() - self.disarm_time > 10000:
             self.mode = 0
             self.command_serv(roscopter.srv.APMCommandRequest.CMD_DISARM)
 
     def fly(self):
-    '''
+	'''
 		Publishes RC commands to the vehicle, depending on what mode it is currently in
 	'''
         if self.buttons:
@@ -296,7 +310,7 @@ class MCN():
                 
             # Button 6 - end autonomy routine (RTL)
             if self.buttons[5]:
-                self.mode = 4
+                self.mode = 5
 
         # Initiates finite state machines
         if not self.failsafe:
@@ -329,13 +343,13 @@ class MCN():
                 self.disarm()
 
         # Publishes commands
-        if self.armed:
+        if self.armed or self.mode == 5:
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
             self.twist[5] = self.tilt
             self.pub_rc.publish(self.twist)
             
     def track_object(self):
-    '''
+	'''
 		Tracks a fiducial 
 	'''
         error_x = 250 - self.data[0]
@@ -351,7 +365,7 @@ class MCN():
         return (pid_x, pid_y, pid_z, pid_yaw)
 
     def pid(self, variable_name):
-    '''
+	'''
 		Calculates the best control signal to be published in order for the
 		drone to reach the target state.
 	'''
@@ -360,31 +374,44 @@ class MCN():
             self.t1[variable_name] = millis()
             self.t2[variable_name] = millis() + 0.001 # Prevent division by zero
         else:
-            self.t1[variable_name] = t2[variable_name]
+            self.t1[variable_name] = self.t2[variable_name]
             self.t2[variable_name] = millis()
-        dt = (self.t2[variable_name] - self.t1[variable_name]) / 1000
+        dt = (self.t2[variable_name] - self.t1[variable_name]) / 1000 + 0.001
 
         # Calculates the error, error cumulative sum, and error difference
         self.error_prev [variable_name] =  self.error [variable_name]
         self.error      [variable_name] =  self.target_state [variable_name] - self.current_state [variable_name]
         self.error_sum  [variable_name] += self.error [variable_name] * dt
-        self.error_dif  [variable_name] =  self.error [variable_name] - self.error_prev [variable_name]
+        error_dif                       =  self.error [variable_name] - self.error_prev [variable_name]
 
         # Calculates PID
-        P = K_p [variable_name] * self.error     [variable_name]
-        I = K_i [variable_name] * self.error_sum [variable_name]
-        D = K_d [variable_name] * self.error_dif [variable_name] / dt
+        P = self.K_p [variable_name] * self.error     [variable_name]
+        I = self.K_i [variable_name] * self.error_sum [variable_name]
+        D = self.K_d [variable_name] * error_dif / dt
         PID = P + I + D
 
         # Returns the PID result, scaled to the correct control range
         return PID * 400 + 1500
+
+    def reset_pid(self):
+    # '''
+    #     Resets all PID variables
+    # '''
+        self.current_state = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
+        self.target_state = {'x': 0, 'y': 0, 'z': 5.0, 'yaw': 0}
+        self.error = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
+        self.error_prev = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
+        self.error_sum = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
+        self.t1 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
+        self.t2 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
+
 
 
 def millis():
 	'''
 		Calculates the number of milliseconds since the epoch started
 	'''
-    return int(round(time.time() * 1000))
+	return int(round(time.time() * 1000))
 
 if __name__ == '__main__':
     print 'process started at ' + str(datetime.now())
