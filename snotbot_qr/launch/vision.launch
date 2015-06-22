@@ -1,6 +1,6 @@
 <launch>
 
-<node pkg="snotbot_qr" type="qr_vision" name="vision" required="True">
+<node pkg="snotbot_qr" type="qr_vision" name="vision" require="true">
 </node>
 
 

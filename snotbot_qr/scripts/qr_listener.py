@@ -34,7 +34,7 @@ class MCN():
         self.twist = [0, 0, 0, 0, 1500, 1500, 1500, 1500]
         self.x = 1500.       # Side Tilt
         self.y = 1500.       # Front Tilt
-        self.z = 1500.       # Throttle
+        self.z = 1000.       # Throttle
         self.yaw = 1500.     # Spin
         self.tilt = 1000.    # Camera tilt
 
@@ -70,16 +70,16 @@ class MCN():
         #########################
 
         self.current_state = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}   # Current state
-        self.target_state = {'x': 0, 'y': 0, 'z': 5.0, 'yaw': 0}  # Target state
+        self.target_state = {'x': 0, 'y': 0, 'z': 3.0, 'yaw': 0}  # Target state
         self.error = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}           # Error state (target - current)
         self.error_prev = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}      # Previous error
         self.error_sum = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}       # Error cumulative sum
         self.t1 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}              # Time of previous calculation
         self.t2 = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}              # Time of current calculation
 
-        self.K_p = {'x': 0.0, 'y': 0.0, 'z': 0.3, 'yaw': 0.1}     # Proportional control
-        self.K_i = {'x': 0.0, 'y': 0.0, 'z': 0.6, 'yaw': 0.1}     # Integral control
-        self.K_d = {'x': 0.0, 'y': 0.0, 'z': 0.001, 'yaw': 0.0}     # Differential control
+        self.K_p = {'x': 0.0, 'y': 0.0, 'z': 0.3, 'yaw': 0.2}     # Proportional control
+        self.K_i = {'x': 0.0, 'y': 0.0, 'z': 0.3, 'yaw': 0.2}     # Integral control
+        self.K_d = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0}     # Differential control
 
 
         ######################
@@ -162,7 +162,7 @@ class MCN():
 	'''
         self.armed = data.armed
         self.flight_mode = data.mode
-
+        
     def attitude_callback(self, data):
 	'''
 		Obtains current yaw of vehicle
@@ -191,6 +191,7 @@ class MCN():
 	'''
         self.command_serv(roscopter.srv.APMCommandRequest.CMD_SET_LOITER)
         self.command_serv(roscopter.srv.APMCommandRequest.CMD_ARM)
+        self.z = 1000
         self.mode = 2
         self.arm_time = millis()
 
@@ -200,14 +201,14 @@ class MCN():
 	'''
 	    # Waits 5 seconds after arming to launch
         if millis() - self.arm_time > 5000:
+            self.z = self.pid('z')
+
             # If the drone maintains the target altitude for a few seconds, go to the next mode
             if abs(self.current_state['z'] - self.target_state['z']) > 1.0:
-                self.z = self.pid('z')
                 self.althold_time = millis()
-            else:
-                if millis() - self.althold_time > 3000:
+            elif millis() - self.althold_time > 3000:
                     self.reset_pid()
-                    self.rtl_time = milli()
+                    self.rtl_time = millis()
                     self.mode = 5
     
     def search(self):
@@ -240,21 +241,25 @@ class MCN():
         error = self.target_state['yaw'] - self.current_state['yaw']
         epsilon = 0.3
 
+        self.z = 1500
+
         # Turns the drone towards the landing platform then moves it forwards
         if abs(error) < 0.3 or abs(error - 2 * math.pi) < epsilon:  # Doesn't move forwards if not facing in the correct direction
             if millis() - self.rtl_time > 5000:
-                self.y = 1550
+                self.y = 1400
         else:
             self.rtl_time = millis()
             self.y = 1500
 
-        # Stops RTL if the drone is within 3 meters of the target
-        if gps_tools.distance(self.drone_gps, self.platform_gps) > 0.005:
+        # Stops RTL if the drone is within 2 meters of the target
+        if gps_tools.distance(self.drone_gps, self.platform_gps) > 0.002:
             self.yaw = self.pid('yaw')
             if error > math.pi:
                 self.yaw = 3000 - self.yaw
         else:
+            self.x = 1000
             self.reset_pid()
+            self.land_time = millis()
             self.mode = 6
 
     def land(self):
@@ -267,7 +272,9 @@ class MCN():
         self.yaw = 1500
 
         # Moves to disarming phase if altitude has dropped far enough
-        if abs(self.current_state['z'] - self.starting_alt) < 2.0:
+        if abs(self.climb) > 0.02:
+            self.land_time = millis()
+        elif millis() - self.land_time > 5000
         	self.disarm_time = millis()
         	self.mode = 7
 
@@ -343,7 +350,7 @@ class MCN():
                 self.disarm()
 
         # Publishes commands
-        if self.armed or self.mode == 5:
+        if self.armed:
             (self.twist[0], self.twist[1], self.twist[2], self.twist[3]) = (int(self.x), int(self.y), int(self.z), int(self.yaw))
             self.twist[5] = self.tilt
             self.pub_rc.publish(self.twist)
@@ -398,7 +405,7 @@ class MCN():
     #     Resets all PID variables
     # '''
         self.current_state = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
-        self.target_state = {'x': 0, 'y': 0, 'z': 5.0, 'yaw': 0}
+        self.target_state = {'x': 0, 'y': 0, 'z': 3.0, 'yaw': 0}
         self.error = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
         self.error_prev = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
         self.error_sum = {'x': 0, 'y': 0, 'z': 0, 'yaw': 0}
